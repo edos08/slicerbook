@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build app/data/catalog.json from an OrcaSlicer source checkout.
 
-Usage: extract_catalog.py <orca-checkout> <out.json>
+Usage: extract_catalog.py <orca-checkout> <out.json> [icons-out-dir]
 
 Reads the tab layout (pages/groups/option keys) from src/slic3r/GUI/Tab.cpp and the
 option definitions (label, tooltip, type, limits, enums) from src/libslic3r/PrintConfig.cpp.
@@ -59,6 +59,8 @@ def parse_defs(src):
         if vals:
             d["enum"] = [{"value": unescape(v), "label": labels[i] if i < len(labels) else unescape(v)}
                          for i, v in enumerate(vals)]
+        mm = re.search(r"def->mode\s*=\s*com(\w+)", body)
+        d["mode"] = mm.group(1).lower() if mm else "simple"  # ConfigOptionDef::mode defaults to comSimple
         if re.search(r"def->multiline\s*=\s*true", body):
             d["multiline"] = True
         out[key] = d
@@ -77,14 +79,14 @@ def parse_layout(lines, marker, defs):
     pages = []
     for l in lines[begin:end]:
         code = l.split("//")[0]
-        m = re.search(r'add_options_page\(\s*(?:L\("([^"]*)"\)|(\w+))', code)
+        m = re.search(r'add_options_page\(\s*(?:L\("([^"]*)"\)|(\w+))\s*,\s*"([^"]*)"', code)
         if m:
             # non-literal titles (page_name) are the per-extruder pages
-            pages.append({"title": m.group(1) or "Extruder", "groups": []})
+            pages.append({"title": m.group(1) or "Extruder", "icon": m.group(3), "groups": []})
             continue
-        m = re.search(r'new_optgroup\(\s*L\("([^"]*)"\)', code)
+        m = re.search(r'new_optgroup\(\s*L\("([^"]*)"\)(?:\s*,\s*L?"([^"]*)")?', code)
         if m and pages:
-            pages[-1]["groups"].append({"title": m.group(1), "options": []})
+            pages[-1]["groups"].append({"title": m.group(1), "icon": m.group(2) or "", "options": []})
             continue
         if pages and pages[-1]["groups"]:
             for key in re.findall(r'(?:get_option|append_single_option_line)\(\s*"(\w+)"', code):
@@ -93,7 +95,22 @@ def parse_layout(lines, marker, defs):
     return pages
 
 
-def main(orca, out):
+def copy_icons(orca, kinds, dest):
+    """Copy the SVGs that pages and groups refer to; drop references to icons that don't exist."""
+    src = Path(orca) / "resources/images"
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    for pages in kinds.values():
+        for p in pages:
+            for node in [p, *p["groups"]]:
+                name = node.get("icon", "")
+                if name and (src / f"{name}.svg").exists():
+                    (dest / f"{name}.svg").write_bytes((src / f"{name}.svg").read_bytes())
+                else:
+                    node.pop("icon", None)
+
+
+def main(orca, out, icons=None):
     orca = Path(orca)
     defs = parse_defs((orca / "src/libslic3r/PrintConfig.cpp").read_text(errors="replace"))
     lines = (orca / "src/slic3r/GUI/Tab.cpp").read_text(errors="replace").splitlines()
@@ -116,12 +133,14 @@ def main(orca, out):
                                 ("jerk", "mm/s", "Maximum jerk of the {} axis")):
             defs[f"machine_max_{what}_{ax}"] = {
                 "type": "coFloats", "label": f"Maximum {what} {ax.upper()}",
-                "tooltip": tip.format(ax.upper()), "sidetext": unit, "min": 0.0}
+                "tooltip": tip.format(ax.upper()), "sidetext": unit, "min": 0.0, "mode": "simple"}
     # Motion ability keys are built in a loop over variable names, so add them by prefix.
     motion = [k for k in defs if re.match(r"machine_(max|min)_(speed|acceleration|jerk|junction)|machine_(max|min)_\w+$", k)
               and not k.endswith("_gcode")]
-    kinds["printer"].append({"title": "Motion ability", "groups": [{"title": "Limits", "options": sorted(motion)}]})
+    kinds["printer"].append({"title": "Motion ability", "icon": "custom-gcode_motion", "groups": [{"title": "Limits", "options": sorted(motion)}]})
     kinds["printer"].sort(key=lambda p: PRINTER_PAGE_ORDER.index(p["title"]) if p["title"] in PRINTER_PAGE_ORDER else 99)
+    if icons:
+        copy_icons(orca, kinds, icons)
     used = {k for pages in kinds.values() for p in pages for g in p["groups"] for k in g["options"]}
     tag = subprocess.run(["git", "-C", str(orca), "describe", "--tags"], capture_output=True, text=True).stdout.strip()
     Path(out).write_text(json.dumps({
@@ -135,4 +154,4 @@ def main(orca, out):
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:3])
+    main(*sys.argv[1:4])

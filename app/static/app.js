@@ -194,11 +194,18 @@ $("#base-printer").onchange = async () => {
 const curValue = (kind, key) => key in ov[kind] ? ov[kind][key] : defaults[kind][key];
 const changedCount = kind => Object.keys(ov[kind]).length;
 
+const LEVELS = ["simple", "advanced", "expert"];
+const ic = name => name ? `<img class="ic" src="icons/${esc(name)}.svg" alt="">` : "";
+const store = {
+  get: k => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
+};
+ed.level = LEVELS.includes(store.get("level")) ? store.get("level") : "advanced";
+
 function optRow(kind, key) {
   const def = catalog.options[key] || {};
   const base = defaults[kind][key], cur = curValue(kind, key);
   const changed = key in ov[kind];
-  const wide = def.multiline;
   let ctl;
   if (isBool(def)) {
     const on = String([].concat(cur ?? "0")[0]) === "1";
@@ -214,65 +221,78 @@ function optRow(kind, key) {
     ctl = `<input data-key="${key}" ${dl} value="${esc(show(cur))}">${def.sidetext ? `<span class="unit">${esc(def.sidetext)}</span>` : ""}` +
       (def.enum ? `<datalist id="dl-${key}">${def.enum.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("")}</datalist>` : "");
   }
-  const defTxt = base === undefined ? "no default" : `default: ${short(base, 28)}`;
-  return `<div class="opt ${changed ? "changed" : ""} ${wide ? "wide" : ""}" data-kind="${kind}" data-key="${key}">
-    <div class="lbl" title="${esc(def.tooltip || "")}">${esc(def.label || key)}<code>${esc(key)}</code></div>
-    <div class="ctl">${ctl}</div>
-    <div class="def"><span title="${esc(show(base))}">${esc(defTxt)}</span><button type="button" class="small reset">reset</button></div>
+  const tip = [def.tooltip, `${key}${base !== undefined ? ` · default: ${show(base)}` : ""}`].filter(Boolean).join("\n\n");
+  return `<div class="opt ${changed ? "changed" : ""} ${def.multiline ? "wide" : ""}" data-kind="${kind}" data-key="${key}" title="${esc(tip)}">
+    <div class="lbl">${esc(def.label || key)}${changed ? `<span class="was">${base === undefined ? "added" : `default ${esc(short(base, 30))}`}</span>` : ""}</div>
+    <div class="ctl">${ctl}<button type="button" class="reset" title="Back to default">↺</button></div>
   </div>`;
 }
 
 function renderEditor() {
-  const pages = catalog.kinds[ed.kind];
+  const kind = ed.kind, pages = catalog.kinds[kind];
   const q = ed.q.trim().toLowerCase();
+  const rank = LEVELS.indexOf(ed.level);
+  // an override is always shown, whatever the level
+  const visible = key => key in ov[kind] || LEVELS.indexOf(catalog.options[key]?.mode) <= rank && catalog.options[key]?.mode !== "develop";
   const wanted = key => {
-    if (ed.changedOnly && !(key in ov[ed.kind])) return false;
+    if (!visible(key)) return false;
+    if (ed.changedOnly && !(key in ov[kind])) return false;
     if (!q) return true;
     const d = catalog.options[key];
     return `${key} ${d.label || ""} ${d.tooltip || ""}`.toLowerCase().includes(q);
   };
+  const pageKeys = pg => pg.groups.flatMap(g => g.options.filter(wanted));
+  const searching = q || ed.changedOnly;
+  const nonEmpty = pages.map((pg, i) => [pg, i]).filter(([pg]) => pageKeys(pg).length);
+  if (!nonEmpty.some(([, i]) => i === ed.page)) ed.page = nonEmpty[0]?.[1] ?? 0;
+  const shown = searching ? nonEmpty.map(([pg]) => pg) : [pages[ed.page]].filter(Boolean);
+
   let body = "";
-  const list = q || ed.changedOnly ? pages : [pages[ed.page] ?? pages[0]];
-  for (const pg of list) {
+  for (const pg of shown) {
     for (const g of pg.groups) {
       const keys = g.options.filter(wanted);
       if (!keys.length) continue;
-      body += `<h4>${esc(q || ed.changedOnly ? `${pg.title} › ${g.title}` : g.title)}</h4>${keys.map(k => optRow(ed.kind, k)).join("")}`;
+      body += `<section class="grp"><h4>${ic(g.icon)}${esc(searching ? `${pg.title} › ${g.title}` : g.title)}</h4>${keys.map(k => optRow(kind, k)).join("")}</section>`;
     }
   }
   // overrides for keys the catalog doesn't lay out (e.g. imported advanced settings)
   const laidOut = new Set(pages.flatMap(p => p.groups.flatMap(g => g.options)));
-  const extra = Object.keys(ov[ed.kind]).filter(k => !laidOut.has(k) && (!q || k.includes(q)));
-  if ((q || ed.changedOnly) && extra.length) body += `<h4>Other</h4>${extra.map(k => optRow(ed.kind, k)).join("")}`;
+  const extra = Object.keys(ov[kind]).filter(k => !laidOut.has(k) && (!q || k.includes(q)));
+  if (searching && extra.length) body += `<section class="grp"><h4>Other</h4>${extra.map(k => optRow(kind, k)).join("")}</section>`;
 
+  const pageBadge = pg => { const n = pg.groups.flatMap(g => g.options).filter(k => k in ov[kind]).length; return n ? `<span class="n">${n}</span>` : ""; };
   $("#editor").innerHTML = `
     <div class="bar">
-      <div class="tabs">${KINDS.map(([k, n]) =>
-        `<button type="button" class="tab ${k === ed.kind ? "on" : ""}" data-kind="${k}">${n}${changedCount(k) ? `<span class="n">${changedCount(k)}</span>` : ""}</button>`).join("")}</div>
-      <input type="search" id="opt-q" placeholder="Search ${esc(KINDS.find(k => k[0] === ed.kind)[1])} settings…" value="${esc(ed.q)}">
+      <div class="tabs kinds">${KINDS.map(([k, n]) =>
+        `<button type="button" class="tab ${k === kind ? "on" : ""}" data-kind="${k}">${n}${changedCount(k) ? `<span class="n">${changedCount(k)}</span>` : ""}</button>`).join("")}</div>
+      <input type="search" id="opt-q" placeholder="Search ${esc(KINDS.find(k => k[0] === kind)[1])} settings…" value="${esc(ed.q)}">
+      <select id="level" title="Show settings up to this level">${LEVELS.map(l =>
+        `<option value="${l}" ${l === ed.level ? "selected" : ""}>${l[0].toUpperCase() + l.slice(1)}</option>`).join("")}</select>
       <label><input type="checkbox" id="changed-only" ${ed.changedOnly ? "checked" : ""}> Changed only</label>
     </div>
-    ${q || ed.changedOnly ? "" : `<div class="tabs pages">${pages.map((p, i) =>
-      `<button type="button" class="tab page ${i === ed.page ? "on" : ""}" data-page="${i}">${esc(p.title)}</button>`).join("")}</div>`}
-    <div class="opts">${body || `<p class="hint">Nothing to show.</p>`}</div>`;
+    <div class="split">
+      <nav class="rail">${searching ? "" : nonEmpty.map(([pg, i]) =>
+        `<button type="button" class="rail-item ${i === ed.page ? "on" : ""}" data-page="${i}">${ic(pg.icon)}<span>${esc(pg.title)}</span>${pageBadge(pg)}</button>`).join("")}</nav>
+      <div class="opts">${body || `<p class="hint">Nothing to show${ed.level !== "expert" ? " at this level. Try a higher level." : "."}</p>`}</div>
+    </div>`;
   const q$ = $("#opt-q");
-  if (document.activeElement?.id === "opt-q" || ed.refocus) { q$.focus(); q$.setSelectionRange(99, 99); ed.refocus = false; }
+  if (ed.refocus) { q$.focus(); q$.setSelectionRange(99, 99); ed.refocus = false; }
 }
 
 $("#editor").addEventListener("click", e => {
   const t = e.target.closest(".tab");
   if (t?.dataset.kind) { ed.kind = t.dataset.kind; ed.page = 0; ed.q = ""; renderEditor(); }
-  else if (t?.dataset.page) { ed.page = +t.dataset.page; renderEditor(); }
+  const r = e.target.closest(".rail-item");
+  if (r) { ed.page = +r.dataset.page; renderEditor(); }
   if (e.target.classList.contains("reset")) {
     const row = e.target.closest(".opt");
     delete ov[row.dataset.kind][row.dataset.key];
-    ed.changedOnly ? renderEditor() : row.replaceWith(Object.assign(document.createElement("div"),
-      { innerHTML: optRow(row.dataset.kind, row.dataset.key) }).firstElementChild);
-    refreshBadges();
+    renderEditor();
   }
 });
 $("#editor").addEventListener("change", e => {
   if (e.target.id === "changed-only") { ed.changedOnly = e.target.checked; renderEditor(); }
+  if (e.target.id === "level") { ed.level = e.target.value; store.set("level", ed.level); renderEditor(); }
 });
 $("#editor").addEventListener("input", e => {
   if (e.target.id === "opt-q") { ed.q = e.target.value; ed.refocus = true; renderEditor(); return; }
@@ -289,11 +309,20 @@ $("#editor").addEventListener("input", e => {
   } else val = e.target.value;
   if (base !== undefined && same(val, base)) delete ov[kind][key]; else ov[kind][key] = val;
   row.classList.toggle("changed", key in ov[kind]);
+  const lbl = row.querySelector(".lbl");
+  lbl.querySelector(".was")?.remove();
+  if (key in ov[kind]) lbl.insertAdjacentHTML("beforeend", `<span class="was">${base === undefined ? "added" : `default ${esc(short(base, 30))}`}</span>`);
   refreshBadges();
 });
 function refreshBadges() {
   $("#editor").querySelectorAll(".tab[data-kind]").forEach(b => {
     const n = changedCount(b.dataset.kind);
+    b.querySelector(".n")?.remove();
+    if (n) b.insertAdjacentHTML("beforeend", `<span class="n">${n}</span>`);
+  });
+  const pages = catalog.kinds[ed.kind];
+  $("#editor").querySelectorAll(".rail-item").forEach(b => {
+    const n = pages[b.dataset.page].groups.flatMap(g => g.options).filter(k => k in ov[ed.kind]).length;
     b.querySelector(".n")?.remove();
     if (n) b.insertAdjacentHTML("beforeend", `<span class="n">${n}</span>`);
   });
