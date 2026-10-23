@@ -9,50 +9,50 @@
 <body>
 <header>
   <h1>Slicerbook</h1>
-  <input id="search" type="search" placeholder="Search tips, settings, notes…" autocomplete="off">
-  <button id="new" class="primary">+ New tip</button>
+  <input id="search" type="search" placeholder="Search snapshots, settings, notes…" autocomplete="off">
+  <button id="new" class="primary">+ New snapshot</button>
 </header>
 <div id="filters"></div>
 <main id="grid"></main>
-<p id="empty" hidden>No tips yet. Add the first one with “+ New tip”.</p>
+<p id="empty" hidden>No snapshots yet. Pick a printer and save the first one with “+ New snapshot”.</p>
 
 <dialog id="view"></dialog>
 
-<dialog id="edit">
-  <form method="dialog" id="form">
-    <h2 id="edit-title">New tip</h2>
-    <label>Title <input name="title" required placeholder="Cleaner tree supports"></label>
-    <fieldset>
-      <legend>Tested on</legend>
-      <div id="slicer-boxes"></div>
-    </fieldset>
-    <div class="row">
-      <label>Printer <input name="printer" placeholder="X1C, A1…"></label>
-      <label>Filament <input name="filament" placeholder="PLA Basic…"></label>
+<dialog id="edit" class="wide">
+  <form id="form" autocomplete="off">
+    <div class="edit-head">
+      <h2 id="edit-title">New snapshot</h2>
+      <div class="actions">
+        <button type="button" id="cancel">Cancel</button>
+        <button type="submit" class="primary">Save</button>
+      </div>
     </div>
-    <label>Tags (comma separated) <input name="tags" placeholder="supports, quality"></label>
-    <label>Source link <input name="source_url" type="url" placeholder="https://…"></label>
-    <label>Notes <textarea name="notes" rows="3"></textarea></label>
-    <label>Photo <input name="photo" type="file" accept="image/*"></label>
-
-    <fieldset>
-      <legend>Settings (overrides)</legend>
-      <details>
-        <summary>Extract from a profile or 3MF</summary>
-        <p class="hint">Upload the tweaked profile (.json / .3mf) and optionally the baseline it was derived from. Only differing keys are kept.</p>
-        <div class="row">
+    <div class="edit-body">
+      <aside>
+        <label>Title <input name="title" required placeholder="Cleaner tree supports"></label>
+        <label>Base printer
+          <select name="base_printer" id="base-printer"></select>
+        </label>
+        <p class="hint" id="base-hint"></p>
+        <fieldset>
+          <legend>Tested on</legend>
+          <div id="slicer-boxes"></div>
+        </fieldset>
+        <label>Filament used <input name="filament" placeholder="PLA Basic…"></label>
+        <label>Tags (comma separated) <input name="tags" placeholder="supports, quality"></label>
+        <label>Source link <input name="source_url" type="url" placeholder="https://…"></label>
+        <label>Notes <textarea name="notes" rows="4"></textarea></label>
+        <label>Photo <input name="photo" type="file" accept="image/*"></label>
+        <details>
+          <summary>Import from a profile or 3MF</summary>
+          <p class="hint">Upload a profile <code>.json</code> or a <code>.3mf</code>. Only settings that differ from the base printer's defaults (or from an optional baseline file) become overrides.</p>
           <label>Profile <input id="diff-profile" type="file" accept=".json,.3mf"></label>
-          <label>Baseline (optional) <input id="diff-baseline" type="file" accept=".json,.3mf"></label>
-        </div>
-        <button type="button" id="diff-go">Extract overrides</button>
-      </details>
-      <div id="settings-rows"></div>
-      <button type="button" id="add-row">+ Add setting</button>
-    </fieldset>
-
-    <div class="actions">
-      <button type="button" id="cancel">Cancel</button>
-      <button type="submit" class="primary">Save</button>
+          <label>Baseline file (optional) <input id="diff-baseline" type="file" accept=".json,.3mf"></label>
+          <button type="button" id="diff-go">Import overrides</button>
+          <p class="hint" id="diff-msg"></p>
+        </details>
+      </aside>
+      <section id="editor"></section>
     </div>
   </form>
 </dialog>

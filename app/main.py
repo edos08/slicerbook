@@ -7,15 +7,23 @@ import uuid
 import zipfile
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from typing import Any
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "./data"))
 PHOTO_DIR = DATA_DIR / "photos"
 PHOTO_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "tips.db"
+BUNDLED = Path(__file__).parent / "data"
+CATALOG = json.loads((BUNDLED / "catalog.json").read_text())
+PROFILES = json.loads((BUNDLED / "profiles.json").read_text())
+PRINTERS = {p["name"]: p for p in PROFILES["printers"]}
+# catalog kinds are process / filament / printer; shipped profiles call the last one "machine"
+OPTION_KIND = {k: kind for kind, pages in CATALOG["kinds"].items()
+               for pg in pages for g in pg["groups"] for k in g["options"]}
 
 # Keys that differ between profiles but are identity/metadata, not real overrides.
 IGNORED_KEYS = {
@@ -49,6 +57,9 @@ def init_db():
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )"""
         )
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(tips)")}
+        if "base_printer" not in cols:
+            con.execute("ALTER TABLE tips ADD COLUMN base_printer TEXT NOT NULL DEFAULT ''")
 
 
 init_db()
@@ -57,13 +68,15 @@ app = FastAPI(title="Slicer Tips")
 
 class Setting(BaseModel):
     key: str
-    value: str
+    value: Any  # profile-native: a string, or a list of strings for per-extruder/filament options
+    kind: str = ""
 
 
 class TipIn(BaseModel):
     title: str
     slicers: list[str] = []
     printer: str = ""
+    base_printer: str = ""
     filament: str = ""
     tags: list[str] = []
     source_url: str = ""
@@ -75,14 +88,28 @@ def row_to_tip(r):
     d = dict(r)
     for k in ("slicers", "tags", "settings"):
         d[k] = json.loads(d[k])
+    for st in d["settings"]:
+        st.setdefault("kind", kind_of(st["key"], d["base_printer"]))
     return d
 
 
+def kind_of(key: str, base_printer: str = "") -> str:
+    if key in OPTION_KIND:
+        return OPTION_KIND[key]
+    d = printer_defaults(base_printer) if base_printer in PRINTERS else {}
+    for kind in ("printer", "filament", "process"):
+        if key in d.get(kind, {}):
+            return kind
+    return "process"
+
+
 def values(t: TipIn):
+    settings = [{**s.model_dump(), "kind": s.kind or kind_of(s.key, t.base_printer)}
+                for s in t.settings if s.key.strip()]
     return (
-        t.title.strip(), json.dumps(t.slicers), t.printer, t.filament,
+        t.title.strip(), json.dumps(t.slicers), t.printer, t.base_printer, t.filament,
         json.dumps([x.strip() for x in t.tags if x.strip()]), t.source_url, t.notes,
-        json.dumps([s.model_dump() for s in t.settings if s.key.strip()]),
+        json.dumps(settings),
     )
 
 
@@ -97,7 +124,7 @@ def list_tips():
 def create_tip(t: TipIn):
     with db() as con:
         cur = con.execute(
-            "INSERT INTO tips (title,slicers,printer,filament,tags,source_url,notes,settings) VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO tips (title,slicers,printer,base_printer,filament,tags,source_url,notes,settings) VALUES (?,?,?,?,?,?,?,?,?)",
             values(t),
         )
         return row_to_tip(con.execute("SELECT * FROM tips WHERE id=?", (cur.lastrowid,)).fetchone())
@@ -107,7 +134,7 @@ def create_tip(t: TipIn):
 def update_tip(tip_id: int, t: TipIn):
     with db() as con:
         cur = con.execute(
-            "UPDATE tips SET title=?,slicers=?,printer=?,filament=?,tags=?,source_url=?,notes=?,settings=? WHERE id=?",
+            "UPDATE tips SET title=?,slicers=?,printer=?,base_printer=?,filament=?,tags=?,source_url=?,notes=?,settings=? WHERE id=?",
             (*values(t), tip_id),
         )
         if not cur.rowcount:
@@ -153,8 +180,48 @@ def get_photo(name: str):
     return FileResponse(p)
 
 
-def stringify(v):
-    return v if isinstance(v, str) else json.dumps(v, separators=(",", ":"))
+def printer_defaults(name: str) -> dict:
+    """Resolved default presets for a system printer: {process, filament, printer}."""
+    p = PRINTERS.get(name)
+    if not p:
+        raise HTTPException(404, "Unknown printer")
+    return {
+        "process": PROFILES["process"][p["process"]],
+        "filament": PROFILES["filament"][p["filament"]],
+        "printer": PROFILES["machine"][name],
+    }
+
+
+@app.get("/api/catalog")
+def get_catalog():
+    return CATALOG
+
+
+@app.get("/api/printers")
+def list_printers():
+    return PROFILES["printers"]
+
+
+@app.get("/api/printers/{name}/defaults")
+def get_defaults(name: str):
+    return printer_defaults(name)
+
+
+def same(a, b) -> bool:
+    """Profile value equality: numeric strings compare as numbers; lists compare over their common length
+    (a project config carries one entry per loaded filament, system presets only a couple)."""
+    if isinstance(a, list) or isinstance(b, list):
+        la = a if isinstance(a, list) else [a]
+        lb = b if isinstance(b, list) else [b]
+        n = min(len(la), len(lb))
+        return n > 0 and all(same(x, y) for x, y in zip(la[:n], lb[:n]))
+    a, b = str(a), str(b)
+    if a == b:
+        return True
+    try:
+        return float(a) == float(b)
+    except ValueError:
+        return False
 
 
 def load_profile(name: str, data: bytes) -> dict:
@@ -173,34 +240,56 @@ def load_profile(name: str, data: bytes) -> dict:
         raise HTTPException(400, f"Cannot parse {name}: {e}")
     if not isinstance(obj, dict):
         raise HTTPException(400, f"{name}: expected a JSON object")
-    return {k: stringify(v) for k, v in obj.items()}
+    return obj
 
 
 @app.post("/api/diff")
-async def diff(profile: UploadFile = File(...), baseline: UploadFile | None = File(None)):
-    """Return settings in `profile` that differ from `baseline` (or all, if no baseline)."""
+async def diff(
+    profile: UploadFile = File(...),
+    baseline: UploadFile | None = File(None),
+    printer: str = Form(""),
+):
+    """Settings in `profile` that differ from `baseline` (a file) or from a system printer's defaults.
+
+    With a printer baseline only options known to the catalog are kept, so a whole project
+    config doesn't drag in hundreds of printer-specific keys.
+    """
     p = load_profile(profile.filename or "", await profile.read())
-    b = load_profile(baseline.filename or "", await baseline.read()) if baseline and baseline.filename else {}
+    known_only = False
+    if baseline and baseline.filename:
+        b = load_profile(baseline.filename, await baseline.read())
+    elif printer:
+        d = printer_defaults(printer)
+        b = {**d["printer"], **d["process"], **d["filament"]}
+        known_only = True
+    else:
+        b = {}
     out = [
-        {"key": k, "value": v}
+        {"key": k, "value": v, "kind": kind_of(k, printer)}
         for k, v in p.items()
-        if k not in IGNORED_KEYS and (k not in b or b[k] != v)
+        if k not in IGNORED_KEYS and (not known_only or k in OPTION_KIND)
+        and (k not in b or not same(v, b[k]))
     ]
     return {"settings": out, "total_keys": len(p)}
 
 
 @app.get("/api/tips/{tip_id}/export")
-def export_tip(tip_id: int):
+def export_tip(tip_id: int, kind: str = "process"):
+    """Export one kind of a snapshot's overrides as a user preset that inherits the printer's default."""
+    if kind not in ("process", "filament", "printer"):
+        raise HTTPException(400, "kind must be process, filament or printer")
     with db() as con:
         r = con.execute("SELECT * FROM tips WHERE id=?", (tip_id,)).fetchone()
     if not r:
         raise HTTPException(404)
     t = row_to_tip(r)
-    # Minimal user process preset: the overrides only, inheriting the slicer's defaults.
-    # Set `inherits` to your base preset name after importing if you want it chained.
-    prof = {"type": "process", "name": t["title"], "from": "User", "instantiation": "true"}
-    prof.update({s["key"]: s["value"] for s in t["settings"]})
-    fname = re.sub(r"[^\w.-]+", "_", t["title"]) or "tip"
+    prof = {"type": "machine" if kind == "printer" else kind, "name": f'{t["title"]} ({kind})',
+            "from": "User", "instantiation": "true"}
+    p = PRINTERS.get(t["base_printer"])
+    if p:
+        prof["inherits"] = {"process": p["process"], "filament": p["filament"], "printer": p["name"]}[kind]
+    prof.update({s["key"]: s["value"] for s in t["settings"] if s["kind"] == kind})
+    fname = re.sub(r"[^\w.-]+", "_", f'{t["title"]}_{kind}') or "tip"
     return JSONResponse(prof, headers={"Content-Disposition": f'attachment; filename="{fname}.json"'})
 
 
