@@ -1,5 +1,5 @@
 services:
-  slicer-tips:
+  slicerbook:
     build: .
     ports:
       - "8000:8000"
