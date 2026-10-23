@@ -21,6 +21,8 @@ BUNDLED = Path(__file__).parent / "data"
 CATALOG = json.loads((BUNDLED / "catalog.json").read_text())
 PROFILES = json.loads((BUNDLED / "profiles.json").read_text())
 PRINTERS = {p["name"]: p for p in PROFILES["printers"]}
+# Options a system preset doesn't list take the slicer's built-in default, extracted from its source.
+BUILTIN = {"process": {}, "filament": {}, "printer": {}}
 # catalog kinds are process / filament / printer; shipped profiles call the last one "machine"
 OPTION_KIND = {k: kind for kind, pages in CATALOG["kinds"].items()
                for pg in pages for g in pg["groups"] for k in g["options"]}
@@ -91,6 +93,14 @@ def row_to_tip(r):
     for st in d["settings"]:
         st.setdefault("kind", kind_of(st["key"], d["base_printer"]))
     return d
+
+
+for _kind, _pages in CATALOG["kinds"].items():
+    for _pg in _pages:
+        for _g in _pg["groups"]:
+            for _k in _g["options"]:
+                if "default" in CATALOG["options"][_k]:
+                    BUILTIN[_kind][_k] = CATALOG["options"][_k]["default"]
 
 
 def kind_of(key: str, base_printer: str = "") -> str:
@@ -186,9 +196,9 @@ def printer_defaults(name: str) -> dict:
     if not p:
         raise HTTPException(404, "Unknown printer")
     return {
-        "process": PROFILES["process"][p["process"]],
-        "filament": PROFILES["filament"][p["filament"]],
-        "printer": PROFILES["machine"][name],
+        "process": {**BUILTIN["process"], **PROFILES["process"][p["process"]]},
+        "filament": {**BUILTIN["filament"], **PROFILES["filament"][p["filament"]]},
+        "printer": {**BUILTIN["printer"], **PROFILES["machine"][name]},
     }
 
 
@@ -214,7 +224,7 @@ def same(a, b) -> bool:
         la = a if isinstance(a, list) else [a]
         lb = b if isinstance(b, list) else [b]
         n = min(len(la), len(lb))
-        return n > 0 and all(same(x, y) for x, y in zip(la[:n], lb[:n]))
+        return (n > 0 or not la and not lb) and all(same(x, y) for x, y in zip(la[:n], lb[:n]))
     a, b = str(a), str(b)
     if a == b:
         return True
@@ -275,7 +285,7 @@ async def diff(
 
 @app.get("/api/tips/{tip_id}/export")
 def export_tip(tip_id: int, kind: str = "process"):
-    """Export one kind of a snapshot's overrides as a user preset that inherits the printer's default."""
+    """Export one kind of a recipe's overrides as a user preset that inherits the printer's default."""
     if kind not in ("process", "filament", "printer"):
         raise HTTPException(400, "kind must be process, filament or printer")
     with db() as con:

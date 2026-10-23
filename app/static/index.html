@@ -9,19 +9,21 @@
 <body>
 <header>
   <h1>Slicerbook</h1>
-  <input id="search" type="search" placeholder="Search snapshots, settings, notes…" autocomplete="off">
-  <button id="new" class="primary">+ New snapshot</button>
+  <input id="search" type="search" placeholder="Search recipes, settings, notes…" autocomplete="off">
+  <button id="new" class="primary">+ New recipe</button>
 </header>
 <div id="filters"></div>
 <main id="grid"></main>
-<p id="empty" hidden>No snapshots yet. Pick a printer and save the first one with “+ New snapshot”.</p>
+<p id="empty" hidden>No recipes yet. Pick a printer and save the first one with “+ New recipe”.</p>
+
+<footer>Slicerbook · AGPL-3.0 · <a href="https://github.com/edos08/slicerbook" target="_blank" rel="noopener noreferrer">source code</a></footer>
 
 <dialog id="view"></dialog>
 
 <dialog id="edit" class="wide">
   <form id="form" autocomplete="off">
     <div class="edit-head">
-      <h2 id="edit-title">New snapshot</h2>
+      <h2 id="edit-title">New recipe</h2>
       <div class="actions">
         <button type="button" id="cancel">Cancel</button>
         <button type="submit" class="primary">Save</button>

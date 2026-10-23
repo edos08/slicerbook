@@ -25,7 +25,7 @@ function same(a, b) {
   if (a === undefined || b === undefined) return a === b;
   if (Array.isArray(a) || Array.isArray(b)) {
     const la = [].concat(a), lb = [].concat(b), n = Math.min(la.length, lb.length);
-    return n > 0 && la.slice(0, n).every((x, i) => same(x, lb[i]));
+    return (n > 0 || (!la.length && !lb.length)) && la.slice(0, n).every((x, i) => same(x, lb[i]));
   }
   a = String(a); b = String(b);
   if (a === b) return true;
@@ -39,6 +39,13 @@ const isBool = def => def?.type === "coBool" || def?.type === "coBools";
 const label = key => catalog.options[key]?.label || key;
 const WHERE = {};
 const where = key => WHERE[key] || "";
+// "Length" alone is ambiguous on a card, so prefix the group unless the label already says it
+const GENERIC_GROUPS = new Set(["Advanced", "Basic information", "Others", "Notes"]);
+const nice = key => {
+  const l = label(key), g = where(key).split(" › ")[1] || "";
+  const stem = g.toLowerCase().split(/[^a-z]+/)[0];
+  return !g || GENERIC_GROUPS.has(g) || l.toLowerCase().includes(stem) ? l : `${g}: ${l}`;
+};
 const modelOf = name => printers.find(p => p.name === name)?.model || "";
 
 async function load() {
@@ -75,7 +82,7 @@ function render() {
         <h3>${esc(t.title)}</h3>
         <div class="meta">${esc([t.base_printer, t.filament].filter(Boolean).join(" · "))}</div>
         <div class="chips">${tipLabels(t).map(l => `<span class="chip static">${esc(l)}</span>`).join("")}</div>
-        <div class="kv">${t.settings.slice(0, 3).map(s => `${esc(label(s.key))}: <b>${esc(short(s.value, 24))}</b>`).join("<br>")}
+        <div class="kv">${t.settings.slice(0, 3).map(s => `${esc(nice(s.key))}: <b>${esc(short(s.value, 24))}</b>`).join("<br>")}
           ${t.settings.length > 3 ? `<br>+${t.settings.length - 3} more` : ""}
           ${t.settings.length ? `<br>${countByKind(t).map(([n, c]) => `${n} ${c}`).join(" · ")}` : ""}</div>
       </div>
@@ -122,7 +129,7 @@ async function openView(t) {
       ${KINDS.filter(([k]) => t.settings.some(s => s.kind === k)).map(([k, n]) =>
         `<a href="/api/tips/${t.id}/export?kind=${k}"><button type="button">Export ${n}</button></a>`).join("")}
       <button data-a="edit">Edit</button>
-      <button data-a="close" class="primary">Close</button>
+      <button data-a="close" class="primary" autofocus>Close</button>
     </div>`;
   v.onclick = async e => {
     const a = e.target.dataset.a;
@@ -161,7 +168,7 @@ async function openEdit(t) {
   editingId = t?.id ?? null;
   const f = $("#form");
   f.reset();
-  $("#edit-title").textContent = t ? "Edit snapshot" : "New snapshot";
+  $("#edit-title").textContent = t ? "Edit recipe" : "New recipe";
   f.elements.title.value = t?.title ?? "";
   f.elements.filament.value = t?.filament ?? "";
   f.elements.tags.value = (t?.tags ?? []).join(", ");
@@ -214,11 +221,11 @@ function optRow(kind, key) {
     ctl = `<textarea data-key="${key}" spellcheck="false">${esc(show(cur))}</textarea>`;
   } else if (def.enum && def.type === "coEnum") {
     const cv = String([].concat(cur ?? "")[0]);
-    ctl = `<select data-key="${key}">${def.enum.map(o =>
+    ctl = `<select data-key="${key}">${cv === "" ? `<option value="" selected>not set</option>` : ""}${def.enum.map(o =>
       `<option value="${esc(o.value)}" ${o.value === cv ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`;
   } else {
     const dl = def.enum ? `list="dl-${key}"` : "";
-    ctl = `<input data-key="${key}" ${dl} value="${esc(show(cur))}">${def.sidetext ? `<span class="unit">${esc(def.sidetext)}</span>` : ""}` +
+    ctl = `<input data-key="${key}" ${dl} value="${esc(show(cur))}" ${cur === undefined ? 'placeholder="not set"' : ""}>${def.sidetext ? `<span class="unit">${esc(def.sidetext)}</span>` : ""}` +
       (def.enum ? `<datalist id="dl-${key}">${def.enum.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("")}</datalist>` : "");
   }
   const tip = [def.tooltip, `${key}${base !== undefined ? ` · default: ${show(base)}` : ""}`].filter(Boolean).join("\n\n");

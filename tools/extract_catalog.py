@@ -35,10 +35,64 @@ def literals(expr):
     return unescape("".join(re.findall(STR, expr)))
 
 
+def fmt_num(x):
+    return "%.10g" % float(x.rstrip("fF"))
+
+
+def enum_symbols(src):
+    """C++ enum symbol -> option string, from the s_keys_map_* tables."""
+    out = {}
+    for body in re.findall(r"s_keys_map_\w+\s*\{(.*?)\};", src, re.S):
+        out.update({sym: name for name, sym in re.findall(r'\{\s*"([^"]+)"\s*,\s*(\w+)\s*\}', body)})
+    return out
+
+
+def parse_default(body, symbols):
+    """Built-in default of an option as a profile-style value (string, or list of strings); None if not a simple literal."""
+    m = re.search(r"set_default_value\(\s*new ConfigOption(\w+)(?:<\w+>)?\s*([({])\s*(.*?)\s*[)}]\s*\)\s*;", body, re.S)
+    if not m:
+        return None
+    typ, _, arg = m.groups()
+    arg = arg.strip().strip("{}").strip()  # ({0}) and { 0 } both reach here
+    num = r"-?\d+\.?\d*(?:[eE]-?\d+)?[fF]?"
+    def one(v):
+        v = v.strip()
+        if typ.startswith(("Float", "Int")) and typ not in ("FloatOrPercent", "FloatsOrPercents") and re.fullmatch(num, v):
+            return fmt_num(v)
+        if typ.startswith("Percent") and re.fullmatch(num, v):
+            return fmt_num(v) + "%"
+        if typ.startswith("Bool") and v in ("true", "false"):
+            return "1" if v == "true" else "0"
+        if typ.startswith("String") and re.fullmatch(STR, v):
+            return unescape(v[1:-1])
+        if typ.startswith("Enum"):
+            return symbols.get(v)
+        return None
+    if typ == "FloatOrPercent":
+        fm = re.fullmatch(rf"({num})\s*,\s*(true|false)", arg)
+        return fmt_num(fm.group(1)) + ("%" if fm.group(2) == "true" else "") if fm else None
+    if typ in ("Float", "Int", "Percent", "Bool", "String", "Enum"):
+        if typ == "String" and arg == "":
+            return ""
+        return one(arg)
+    if typ in ("Floats", "Ints", "Percents", "Bools", "Strings"):
+        t = typ[:-1]
+        items = [x for x in re.split(r",(?![^\"]*\"(?:[^\"]|\\.)*$)", arg) if x.strip()] if arg else []
+        vals = []
+        for it in items:
+            v = (lambda tt: one(it))(t)
+            if v is None:
+                return None
+            vals.append(v)
+        return vals
+    return None
+
+
 def parse_defs(src):
     """key -> definition dict, from `def = this->add("key", coType);` blocks."""
     out = {}
-    blocks = re.split(r'\n\s*def\s*=\s*this->add(?:_nullable)?\(\s*"', src)[1:]
+    symbols = enum_symbols(src)
+    blocks = re.split(r'\bdef\s*=\s*this->add(?:_nullable)?\(\s*"', src)[1:]
     for b in blocks:
         m = re.match(r'(\w+)"\s*,\s*(\w+)\s*\)', b)
         if not m:
@@ -59,6 +113,9 @@ def parse_defs(src):
         if vals:
             d["enum"] = [{"value": unescape(v), "label": labels[i] if i < len(labels) else unescape(v)}
                          for i, v in enumerate(vals)]
+        dv = parse_default(body.split("this->add(")[0], symbols)  # stop at the next definition if blocks ever overlap
+        if dv is not None:
+            d["default"] = dv
         mm = re.search(r"def->mode\s*=\s*com(\w+)", body)
         d["mode"] = mm.group(1).lower() if mm else "simple"  # ConfigOptionDef::mode defaults to comSimple
         if re.search(r"def->multiline\s*=\s*true", body):
