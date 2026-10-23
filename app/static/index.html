@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slicerbook</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Slicerbook</h1>
+  <input id="search" type="search" placeholder="Search tips, settings, notes…" autocomplete="off">
+  <button id="new" class="primary">+ New tip</button>
+</header>
+<div id="filters"></div>
+<main id="grid"></main>
+<p id="empty" hidden>No tips yet. Add the first one with “+ New tip”.</p>
+
+<dialog id="view"></dialog>
+
+<dialog id="edit">
+  <form method="dialog" id="form">
+    <h2 id="edit-title">New tip</h2>
+    <label>Title <input name="title" required placeholder="Cleaner tree supports"></label>
+    <fieldset>
+      <legend>Tested on</legend>
+      <div id="slicer-boxes"></div>
+    </fieldset>
+    <div class="row">
+      <label>Printer <input name="printer" placeholder="X1C, A1…"></label>
+      <label>Filament <input name="filament" placeholder="PLA Basic…"></label>
+    </div>
+    <label>Tags (comma separated) <input name="tags" placeholder="supports, quality"></label>
+    <label>Source link <input name="source_url" type="url" placeholder="https://…"></label>
+    <label>Notes <textarea name="notes" rows="3"></textarea></label>
+    <label>Photo <input name="photo" type="file" accept="image/*"></label>
+
+    <fieldset>
+      <legend>Settings (overrides)</legend>
+      <details>
+        <summary>Extract from a profile or 3MF</summary>
+        <p class="hint">Upload the tweaked profile (.json / .3mf) and optionally the baseline it was derived from. Only differing keys are kept.</p>
+        <div class="row">
+          <label>Profile <input id="diff-profile" type="file" accept=".json,.3mf"></label>
+          <label>Baseline (optional) <input id="diff-baseline" type="file" accept=".json,.3mf"></label>
+        </div>
+        <button type="button" id="diff-go">Extract overrides</button>
+      </details>
+      <div id="settings-rows"></div>
+      <button type="button" id="add-row">+ Add setting</button>
+    </fieldset>
+
+    <div class="actions">
+      <button type="button" id="cancel">Cancel</button>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+<script src="app.js"></script>
+</body>
+</html>
